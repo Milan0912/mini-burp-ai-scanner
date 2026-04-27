@@ -1,0 +1,27 @@
+{
+  "name": "miniburp-backend",
+  "version": "1.0.0",
+  "description": "MiniBurp MITM Proxy Backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "axios": "^1.14.0",
+    "better-sqlite3": "^12.8.0",
+    "cheerio": "^1.2.0",
+    "chrome-launcher": "^1.2.1",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "nanoid": "^3.3.7",
+    "node-forge": "^1.3.1",
+    "p-limit": "^3.1.0",
+    "pdfkit": "^0.18.0",
+    "puppeteer": "^24.40.0",
+    "puppeteer-core": "^24.40.0",
+    "socket.io": "^4.7.4",
+    "unzipper": "^0.12.3"
+  }
+}

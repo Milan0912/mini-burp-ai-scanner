@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# SQLite databases
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+
+# Temp / test artifacts
+*.png
+*.jpg
+verify_output.txt
+scan_results.txt
+clean_project.js

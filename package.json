@@ -1,0 +1,15 @@
+{
+  "name": "miniburp",
+  "version": "1.0.0",
+  "description": "MiniBurp - Production-grade Burp Suite-like proxy",
+  "private": true,
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "start:backend": "cd backend && node server.js",
+    "start:frontend": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run start:backend\" \"npm run start:frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
