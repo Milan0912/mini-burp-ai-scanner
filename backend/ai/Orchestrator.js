@@ -44,9 +44,9 @@ class AttackOrchestrator {
     }
 
     getTier(score) {
-        if (score >= 90) return 'VERIFIED';
-        if (score >= 70) return 'HIGH';
-        if (score >= 50) return 'SUSPICIOUS';
+        if (score >= 80) return 'VERIFIED';
+        if (score >= 50) return 'LIKELY';
+        if (score >= 20) return 'INFORMATIONAL';
         return 'IGNORE';
     }
 
@@ -85,7 +85,7 @@ class AttackOrchestrator {
                     const validation = ValidationEngine.validate(baseline, res1, task);
                     
                     if (validation.isValid) {
-                        this.logIntel(reqId, { phase: 'SUSPICIOUS', message: `Anomaly detected. Signals: ${validation.signals.join(', ')}` });
+                        this.logIntel(reqId, { phase: 'INFORMATIONAL', message: `Anomaly detected. Signals: ${validation.signals.join(', ')}` });
                         
                         // 2. Validation (REQUIRED) - Consistency check (3 times)
                         let consistencyRes2 = await this.safeExecute(reqCtx, { ...input, payload: task.payload });
@@ -126,7 +126,7 @@ class AttackOrchestrator {
                                 
                                 const finalConfidence = Math.max(validation.score, exploit.confidence || 0);
 
-                                if (exploit.success || finalConfidence >= 50) {
+                                if (exploit.success || finalConfidence >= 20) {
                                     const tier = exploit.success ? 'VERIFIED' : this.getTier(finalConfidence);
 
                                     this.logIntel(reqId, { phase: 'FINDING', message: `Confirmed ${task.vector} with ${tier} confidence.` });

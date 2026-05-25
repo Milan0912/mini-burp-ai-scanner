@@ -1,5 +1,6 @@
 'use strict';
 
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const net = require('net');
@@ -24,7 +25,7 @@ const agentEngine = require('./ai/agentEngine');
 const scanEngine = require('./scanner/scanEngine');
 const reportGenerator = require('./ai/reportGenerator');
 const memoryDB = require('./ai/memoryDB');
-// projectManager removed (export/import feature disabled)
+const autoAI = require('./ai/autoAI');
 
 const API_PORT_START = 3000;
 const PORT_FILE = path.join(os.homedir(), '.miniburp', 'api.port');
@@ -48,7 +49,13 @@ async function main() {
   
   await initCA();
 
-  // Module verification removed
+  // Initialize AI system
+  await autoAI.init();
+  console.log(`[Server] AI Mode Active: ${autoAI.getMode()}`);
+
+  await db.getDB();
+  const removedCount = db.removeDuplicateFindings();
+  console.log(`[Server] Cleaned up ${removedCount} duplicate findings.`);
 
   // 2. Setup Networking
   const API_PORT = await findAvailablePort(API_PORT_START);
@@ -246,40 +253,26 @@ async function main() {
   // AI Status & Test
   app.get('/api/ai/status', async (req, res) => {
     try {
-      const ollamaClient = require('./ai/ollamaClient');
-      const status = await ollamaClient.getStatus();
-      res.json({ success: true, ...status });
+      if (autoAI.getMode() === 'rule-based' && (process.env.AI_PROVIDER || '').toLowerCase() === 'ollama') {
+        await autoAI.init();
+      }
+      res.json({ success: true, level: autoAI.getMode() });
     } catch (e) {
-      res.json({ success: false, online: false, error: e.message });
+      res.json({ success: false, error: e.message });
     }
   });
 
   app.post('/api/ai/test', async (req, res) => {
     try {
-      const ollamaClient = require('./ai/ollamaClient');
-      const { prompt = 'Reply with: {"status":"ok"}' } = req.body;
-      const result = await ollamaClient.generateAIResponse(prompt, { timeout: 15000 });
-      if (result) {
-        res.json({ success: true, response: result });
-      } else {
-        res.json({ success: false, error: 'AI offline or no model installed. Using heuristic fallback.' });
-      }
+      const result = await autoAI.analyzeFinding({ type: 'sqli', endpoint: 'test' });
+      res.json({ success: true, response: result });
     } catch (e) {
       res.json({ success: false, error: e.message });
     }
   });
 
   app.post('/api/ai/pull', async (req, res) => {
-    const { model = 'mistral' } = req.body;
-    res.json({ success: true, message: `Pulling ${model} in background...` });
-    const ollamaClient = require('./ai/ollamaClient');
-    ollamaClient.pullModel(model)
-      .then(() => {
-        ollamaClient.resetCache();
-        io.emit('ai:model:ready', { model });
-        console.log(`[AI] Model ${model} ready.`);
-      })
-      .catch(e => console.warn(`[AI] Pull failed for ${model}:`, e.message));
+    res.json({ success: true, message: 'Auto-AI system initialized.', level: autoAI.getMode() });
   });
 
 
@@ -307,7 +300,13 @@ async function main() {
     dbFindings.forEach(f => merged.set(f.id, f));
     ramFindings.forEach(f => merged.set(f.id, f));
     
-    const rows = Array.from(merged.values()).sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+    let rows = Array.from(merged.values()).sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+    
+    const confidenceFilter = req.query.confidence;
+    if (confidenceFilter && confidenceFilter !== 'ALL') {
+      rows = rows.filter(f => f.confidence === confidenceFilter);
+    }
+
     console.log(`[API] Returning ${rows.length} findings as 'rows'.`);
     res.json({ success: true, rows });
   });

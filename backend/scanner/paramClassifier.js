@@ -21,7 +21,7 @@ function classifyParameter(paramName) {
 
     // ── File / Path (LFI) ────────────────────────────────────────────
     const fileExact = /^(file|path|dir|folder|include|require|template|doc|document|page|content|load|import|src|source|resource|asset|view|layout|module|config|conf)$/;
-    const fileFuzzy = /file|path|dir|template|include|content|page|view/i;
+    const fileFuzzy = /file|path|template|include|content|page|view/i;
     if (fileExact.test(name) || fileFuzzy.test(name)) return 'file';
 
     // ── Search / Input (XSS + SQLi) ─────────────────────────────────

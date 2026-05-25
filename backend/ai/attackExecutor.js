@@ -539,7 +539,7 @@ async function attackExecutor({ reqId, type, parameter, attempt = 1 }) {
 
       // ── 8. Large body diff (IDOR / data leak) ─────────
       if (!payloadSucceeded && resStatus === 200 && baseStatus === 200 && bodyChanged) {
-        const conf = deltaPercent > 0.50 ? 'HIGH' : deltaPercent > 0.20 ? 'SUSPICIOUS' : 'LOW';
+        const conf = deltaPercent > 0.50 ? 'HIGH' : deltaPercent > 0.20 ? 'INFORMATIONAL' : 'LOW';
         if (conf !== 'LOW' || type.includes('IDOR')) {
           await commit(`⚠️ Likely [${conf}]:`, `Significant body change: Δ${deltaBytes}b (${Math.round(deltaPercent * 100)}%), +${newWords} new words. Payload='${attack.payload}'`);
           break;

@@ -54,7 +54,11 @@ export default function ProxyTab({ socket, apiBase }) {
       // Fetch insights for this specific request
       fetch(`${apiBase}/api/ai/insights/${selectedRequest.id}`)
         .then(r => r.json())
-        .then(data => setAiInsights(data || { findings: [], attackResults: [] }))
+        .then(data => {
+          if (!data) return;
+          if (!data.findings) data.findings = [];
+          setAiInsights(data);
+        })
         .catch(() => {});
     } else {
       setEditedRaw('');

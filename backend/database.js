@@ -56,12 +56,77 @@ async function getDB() {
       endpoint TEXT,
       method TEXT,
       data TEXT,
+      source TEXT DEFAULT 'scanner',
+      confidence TEXT DEFAULT '',
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS scan_sessions (
+      id TEXT PRIMARY KEY,
+      target_url TEXT,
+      status TEXT,
+      discovered INTEGER DEFAULT 0,
+      tested INTEGER DEFAULT 0,
+      findings INTEGER DEFAULT 0,
+      options TEXT,
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME
+    );
+    CREATE TABLE IF NOT EXISTS ai_insights (
+      id TEXT PRIMARY KEY,
+      reqId TEXT,
+      type TEXT,
+      detail TEXT,
+      confidence REAL,
+      generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS exploit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      target_url TEXT,
+      vulnerability_type TEXT,
+      parameter TEXT,
+      module_used VARCHAR(255),
+      success BOOLEAN DEFAULT 0,
+      confidence REAL DEFAULT 0,
+      execution_time INTEGER,
+      output TEXT,
+      evidence TEXT,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp);
     CREATE INDEX IF NOT EXISTS idx_findings_ts ON findings(timestamp);
-
+    CREATE INDEX IF NOT EXISTS idx_scan_sessions ON scan_sessions(started_at);
+    CREATE INDEX IF NOT EXISTS idx_exploit_log_ts ON exploit_log(timestamp);
   `);
+
+  // Migrate legacy findings table if needed
+  const existingColumns = db.prepare(`PRAGMA table_info(findings)`).all().map(r => r.name);
+  if (existingColumns.length > 0) {
+    if (!existingColumns.includes('source')) {
+      db.prepare(`ALTER TABLE findings ADD COLUMN source TEXT DEFAULT 'scanner'`).run();
+    }
+    if (!existingColumns.includes('confidence')) {
+      db.prepare(`ALTER TABLE findings ADD COLUMN confidence TEXT DEFAULT ''`).run();
+    }
+    // Add exploit-related columns
+    if (!existingColumns.includes('exploited')) {
+      db.prepare(`ALTER TABLE findings ADD COLUMN exploited BOOLEAN DEFAULT 0`).run();
+    }
+    if (!existingColumns.includes('exploit_proof')) {
+      db.prepare(`ALTER TABLE findings ADD COLUMN exploit_proof TEXT`).run();
+    }
+    if (!existingColumns.includes('metasploit_module')) {
+      db.prepare(`ALTER TABLE findings ADD COLUMN metasploit_module VARCHAR(255)`).run();
+    }
+    if (!existingColumns.includes('exploitation_timestamp')) {
+      db.prepare(`ALTER TABLE findings ADD COLUMN exploitation_timestamp DATETIME`).run();
+    }
+    if (!existingColumns.includes('ai_verified')) {
+      db.prepare(`ALTER TABLE findings ADD COLUMN ai_verified BOOLEAN DEFAULT 0`).run();
+    }
+    if (!existingColumns.includes('ai_verification_data')) {
+      db.prepare(`ALTER TABLE findings ADD COLUMN ai_verification_data TEXT`).run();
+    }
+  }
 
   stmts.save = db.prepare(`
     INSERT OR REPLACE INTO requests
@@ -79,7 +144,16 @@ async function getDB() {
   stmts.getCount = db.prepare(`SELECT COUNT(*) as count FROM requests`);
   stmts.clear = db.prepare(`DELETE FROM requests`);
   stmts.clearFindings = db.prepare(`DELETE FROM findings`);
-
+  stmts.saveScanSession = db.prepare(`
+    INSERT OR REPLACE INTO scan_sessions
+      (id, target_url, status, discovered, tested, findings, options, started_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmts.saveAiInsight = db.prepare(`
+    INSERT OR REPLACE INTO ai_insights
+      (id, reqId, type, detail, confidence, generated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
 
   return db;
 }
@@ -110,15 +184,21 @@ function saveRequest({ id, method, url, status, requestHeaders, requestBody, res
 
 function saveFinding(f) {
   if (!db) return;
+  const evidenceStr = typeof f.evidence === 'object' && f.evidence !== null ? JSON.stringify(f.evidence) : (f.evidence || '');
+  const args = [
+    f.id, f.reqId || '', f.type || '', f.parameter || '', f.payload || '',
+    f.severity || '', f.cvss_score || 0, evidenceStr, f.endpoint || f.url || '',
+    f.method || '', JSON.stringify(f)
+  ];
   try {
     console.log(`[DB] [FINDING] Saving Finding: ${f.id} | ${f.type} on ${f.endpoint || f.url}`);
-    stmts.saveFinding.run(
-      f.id, f.reqId || '', f.type || '', f.parameter || '', f.payload || '',
-      f.severity || '', f.cvss_score || 0, f.evidence || '', f.endpoint || f.url || '',
-      f.method || '', JSON.stringify(f)
-    );
+    stmts.saveFinding.run(...args);
     console.log(`[DB] [SUCCESS] Saved Finding ${f.id} to database.`);
-  } catch (e) { console.error('[DB] [ERROR] saveFinding failed:', e.message); }
+  } catch (e) {
+    console.error('[DB] [ERROR] saveFinding failed:', e.message);
+    console.error('[DB] [ERROR] Args count:', args.length);
+    console.error('[DB] [ERROR] Args:', JSON.stringify(args));
+  }
 }
 
 function getHistory({ limit = 100, offset = 0, search = '', searchFields = 'url,method' } = {}) {
@@ -255,6 +335,37 @@ async function reinit() {
 
 
 
+function findingExists(type, endpoint, method, parameter) {
+  if (!db) return false;
+  try {
+    const row = db.prepare(`
+      SELECT id FROM findings 
+      WHERE type = ? AND endpoint = ? AND method = ? AND parameter = ?
+      LIMIT 1
+    `).get(type, endpoint, method, parameter);
+    return !!row;
+  } catch (e) {
+    console.error('[DB] findingExists error:', e.message);
+    return false;
+  }
+}
+
+function removeDuplicateFindings() {
+  if (!db) return 0;
+  try {
+    const info = db.prepare(`
+      DELETE FROM findings WHERE id NOT IN (
+        SELECT MIN(id) FROM findings 
+        GROUP BY type, endpoint, method, parameter
+      )
+    `).run();
+    return info.changes;
+  } catch (e) {
+    console.error('[DB] removeDuplicateFindings error:', e.message);
+    return 0;
+  }
+}
+
 function getFindings() {
   if (!db) return [];
   try {
@@ -271,6 +382,41 @@ function clearFindings() {
   try { stmts.clearFindings.run(); } catch(e) {}
 }
 
+function saveScanSession(session) {
+  if (!db || !session || !session.id) return;
+  try {
+    stmts.saveScanSession.run(
+      session.id,
+      session.target_url || session.url || '',
+      session.status || 'unknown',
+      session.discovered || 0,
+      session.tested || 0,
+      session.findings || 0,
+      JSON.stringify(session.options || {}),
+      session.started_at || new Date().toISOString(),
+      session.completed_at || null
+    );
+  } catch (e) {
+    console.error('[DB] saveScanSession error:', e.message);
+  }
+}
+
+function saveAiInsight(insight) {
+  if (!db || !insight || !insight.id) return;
+  try {
+    stmts.saveAiInsight.run(
+      insight.id,
+      insight.reqId || '',
+      insight.type || '',
+      insight.detail || '',
+      insight.confidence || 0,
+      insight.generated_at || new Date().toISOString()
+    );
+  } catch (e) {
+    console.error('[DB] saveAiInsight error:', e.message);
+  }
+}
+
 function updateFinding(id, f) {
   if (!db) return;
   try {
@@ -279,8 +425,52 @@ function updateFinding(id, f) {
   } catch (e) { console.error('[DB] updateFinding error:', e.message); }
 }
 
+function saveExploitLog(logEntry) {
+  if (!db || !logEntry) return;
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO exploit_log
+        (target_url, vulnerability_type, parameter, module_used, success, confidence, execution_time, output, evidence, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `);
+    stmt.run(
+      logEntry.targetUrl || '',
+      logEntry.vulnerabilityType || '',
+      logEntry.parameter || '',
+      logEntry.moduleUsed || '',
+      logEntry.success ? 1 : 0,
+      logEntry.confidence || 0,
+      logEntry.executionTime || 0,
+      logEntry.output || '',
+      logEntry.evidence || ''
+    );
+    console.log(`[DB] Saved exploit log for ${logEntry.vulnerabilityType} on ${logEntry.targetUrl}`);
+  } catch (e) {
+    console.error('[DB] saveExploitLog error:', e.message);
+  }
+}
+
+function getEndpointStats() {
+  if (!db) return { totalRequests: 0, distinctUrls: 0, discovered: 0, tested: 0 };
+  try {
+    const totalRequests = db.prepare(`SELECT COUNT(*) as count FROM requests`).get().count;
+    const distinctUrls = db.prepare(`SELECT COUNT(DISTINCT url) as count FROM requests`).get().count;
+    const latestSession = db.prepare(`SELECT * FROM scan_sessions ORDER BY started_at DESC LIMIT 1`).get();
+    return {
+      totalRequests,
+      distinctUrls,
+      discovered: latestSession ? latestSession.discovered : 0,
+      tested: latestSession ? latestSession.tested : 0,
+    };
+  } catch (e) {
+    console.error('[DB] getEndpointStats error:', e.message);
+    return { totalRequests: 0, distinctUrls: 0, discovered: 0, tested: 0 };
+  }
+}
+
 module.exports = { 
   getDB, saveRequest, getHistory, getRequestById, getCount, clearHistory, searchAll, close, reinit,
-  saveFinding, getFindings, clearFindings, updateFinding
+  saveFinding, getFindings, clearFindings, updateFinding, saveScanSession, saveAiInsight, saveExploitLog,
+  findingExists, removeDuplicateFindings, getEndpointStats
 };
 

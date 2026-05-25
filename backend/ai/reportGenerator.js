@@ -69,10 +69,12 @@ function buildFinding(opts) {
     timestamp:       new Date().toISOString(),
     raw_request:     raw_request || `[${method}] ${url}`,
     raw_response:    raw_response || '',
-    confidence_score: confidence_score,
-    confidence_tier: opts.confidence_tier || 'SUSPICIOUS',
+    confidence_score: opts.score || confidence_score,
+    confidence:      opts.confidence || opts.confidence_tier || 'INFORMATIONAL',
+    confidence_tier: opts.confidence || opts.confidence_tier || 'INFORMATIONAL',
     impact:          opts.impact || 'Highly likely to lead to system compromise or unauthorized data disclosure.',
     proof:           opts.proof || 'Heuristic anomaly detected.',
+    score:           opts.score || cvss.score * 10
   };
 }
 
@@ -148,16 +150,31 @@ function generateJSON() {
 
 function buildSummary(allFindings = []) {
   const counts = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
+  const confCounts = { VERIFIED: 0, LIKELY: 0, INFORMATIONAL: 0 };
+  const breakdown = {};
+
   for (const f of allFindings) {
     const sev = f.cvss_severity || f.severity || 'Info';
     counts[sev] = (counts[sev] || 0) + 1;
+
+    const conf = f.confidence || f.confidence_tier || 'INFORMATIONAL';
+    confCounts[conf] = (confCounts[conf] || 0) + 1;
+
+    const type = f.type || 'Unknown';
+    breakdown[type] = (breakdown[type] || 0) + 1;
   }
-  const maxScore = allFindings.reduce((m, f) => Math.max(m, f.cvss_score || 0), 0);
+
+  const maxScore = allFindings.reduce((m, f) => Math.max(m, f.cvss_score || f.score || 0), 0);
+  const endpointStats = db.getEndpointStats();
+
   return {
     generated:       new Date().toISOString(),
-    tool:            'MiniBurp v2 — AI Vulnerability Testing Engine',
+    tool:            'MiniBurp v2 — AI-Powered Behavioral Verification Platform',
     total_findings:  allFindings.length,
     severity_counts: counts,
+    confidence_counts: confCounts,
+    vulnerability_breakdown: breakdown,
+    endpoint_statistics: endpointStats,
     max_cvss:        maxScore,
     risk_rating:     maxScore >= 9 ? 'CRITICAL' : maxScore >= 7 ? 'HIGH' : maxScore >= 4 ? 'MEDIUM' : 'LOW',
   };
@@ -169,21 +186,45 @@ function generateMarkdown() {
   const summary = buildSummary(all);
   const lines = [];
 
-  lines.push('# 🔴 MiniBurp Security Assessment Report');
+  lines.push('# 🔴 MiniBurp Security Assessment & Verification Report');
   lines.push('');
-  lines.push(`> **Tool:** MiniBurp v2 — AI-Powered Vulnerability Testing Engine`);
+  lines.push(`> **Tool:** MiniBurp v2 — AI-Powered Behavioral Verification Platform`);
   lines.push(`> **Generated:** ${summary.generated}`);
-  lines.push(`> **Risk Rating:** ${summary.risk_rating}`);
-  lines.push(`> **Max CVSS Score:** ${summary.max_cvss}`);
+  lines.push(`> **Risk Rating:** ${summary.risk_rating} (Max CVSS Score: ${summary.max_cvss})`);
   lines.push('');
   lines.push('---');
   lines.push('');
   lines.push('## Executive Summary');
   lines.push('');
-  lines.push('| Severity | Count |');
-  lines.push('|----------|-------|');
-  for (const [sev, count] of Object.entries(summary.severity_counts)) {
-    if (count > 0) lines.push(`| ${sev} | ${count} |`);
+  lines.push('### Endpoint Statistics');
+  lines.push('');
+  lines.push('| Metric | Value |');
+  lines.push('|--------|-------|');
+  lines.push(`| **Total Captured Requests** | ${summary.endpoint_statistics.totalRequests} |`);
+  lines.push(`| **Distinct Targets Scanned** | ${summary.endpoint_statistics.distinctUrls} |`);
+  lines.push(`| **Discovered Endpoints** | ${summary.endpoint_statistics.discovered} |`);
+  lines.push(`| **Tested Endpoints** | ${summary.endpoint_statistics.tested} |`);
+  lines.push('');
+  lines.push('### Severity & Confidence Distribution');
+  lines.push('');
+  lines.push('| Severity | Count | Confidence Tier | Count |');
+  lines.push('|----------|-------|-----------------|-------|');
+  const sevs = Object.keys(summary.severity_counts);
+  const confs = Object.keys(summary.confidence_counts);
+  for (let i = 0; i < Math.max(sevs.length, confs.length); i++) {
+    const sev = sevs[i] || '';
+    const sevCnt = sev ? summary.severity_counts[sev] : '';
+    const conf = confs[i] || '';
+    const confCnt = conf ? summary.confidence_counts[conf] : '';
+    lines.push(`| ${sev} | ${sevCnt} | ${conf} | ${confCnt} |`);
+  }
+  lines.push('');
+  lines.push('### Vulnerability Type Breakdown');
+  lines.push('');
+  lines.push('| Vulnerability Type | Count |');
+  lines.push('|--------------------|-------|');
+  for (const [type, cnt] of Object.entries(summary.vulnerability_breakdown)) {
+    lines.push(`| ${type} | ${cnt} |`);
   }
   lines.push('');
   lines.push('---');
@@ -210,16 +251,22 @@ function generateMarkdown() {
       lines.push(`| **Method** | \`${f.method}\` |`);
       lines.push(`| **Parameter** | \`${f.parameter}\` |`);
       lines.push(`| **Payload** | \`${f.payload}\` |`);
-      lines.push(`| **CVSS Score** | **${f.cvss_score}** (${f.cvss_severity}) |`);
+      lines.push(`| **Confidence Level** | **${f.confidence || f.confidence_tier}** (${f.cvss_score || f.score}%) |`);
       lines.push(`| **CVSS Vector** | \`${f.cvss_vector}\` |`);
       lines.push(`| **Timestamp** | ${f.timestamp} |`);
       lines.push('');
-      lines.push('#### Vulnerability Description');
+      lines.push('#### AI-Assisted Behavioral Reasoning');
       lines.push('');
-      lines.push(f.explanation || f.evidence || 'See evidence below.');
+      lines.push(f.reasoning || f.explanation || 'Analyzed automatically via behavioral verification heuristics.');
       lines.push('');
+      if (f.aiAnalysis) {
+        lines.push('#### AI Explanation');
+        lines.push('');
+        lines.push(typeof f.aiAnalysis === 'string' ? f.aiAnalysis : f.aiAnalysis.explanation || 'N/A');
+        lines.push('');
+      }
       lines.push('#### Evidence (Behavioral Proof)');
-      lines.push('```');
+      lines.push('```json');
       lines.push(typeof f.evidence === 'object' ? JSON.stringify(f.evidence, null, 2) : (f.evidence || 'N/A'));
       lines.push('```');
       if (f.behavior_change) {
@@ -229,19 +276,13 @@ function generateMarkdown() {
         lines.push(JSON.stringify(f.behavior_change, null, 2));
         lines.push('```');
       }
-      if (f.exploit_result) {
-        lines.push('');
-        lines.push('#### Exploitation Result');
-        lines.push('```');
-        lines.push(typeof f.exploit_result === 'object' ? JSON.stringify(f.exploit_result, null, 2) : f.exploit_result);
-        lines.push('```');
-      }
       lines.push('');
       lines.push('#### Reproduction Steps');
       lines.push('');
-      (f.reproduction || []).forEach((s, i) => lines.push(`${i+1}. ${s}`));
+      const steps = f.reproduction_steps || f.reproduction || buildReproduction(f.method, f.fullUrl || f.endpoint, f.parameter, f.payload);
+      steps.forEach((s, i) => lines.push(`${i+1}. ${s}`));
       lines.push('');
-      lines.push('#### Remediation');
+      lines.push('#### Remediation Recommendations');
       lines.push('');
       lines.push(f.prevention || 'Apply input validation and use parameterized queries.');
       lines.push('');
@@ -255,6 +296,7 @@ function generateMarkdown() {
 }
 
 // ── PDF Export ──────────────────────────────────────────────────
+// ── PDF Export ──────────────────────────────────────────────────
 function generatePDF(outputStream) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
@@ -263,44 +305,67 @@ function generatePDF(outputStream) {
     const BG = '#0d0d12', FG = '#e2e8f0', ACC = '#f97316', RED = '#ef4444', GRN = '#22c55e';
     const sevColors = { Critical: '#f43f5e', High: '#ef4444', Medium: '#f97316', Low: '#eab308', Info: '#3b82f6' };
 
-    // Cover
+    // Cover Page
     doc.rect(0, 0, doc.page.width, doc.page.height).fill(BG);
     doc.fill(RED).fontSize(32).text('MiniBurp', 50, 60, { continued: true });
-    doc.fill(FG).text(' Security Report');
-    doc.fill('#64748b').fontSize(11).text('AI-Powered Vulnerability Testing Engine', 50, 100);
+    doc.fill(FG).text(' Security Assessment');
+    doc.fill('#64748b').fontSize(11).text('AI-Powered Behavioral Verification Platform', 50, 100);
 
     const summary = buildSummary(getFindings());
-    doc.fill(ACC).fontSize(13).text(`Risk Rating: ${summary.risk_rating}`, 50, 130);
+    doc.fill(ACC).fontSize(14).text(`Overall Risk Rating: ${summary.risk_rating}`, 50, 130);
     doc.fill(FG).fontSize(10).text(`Generated: ${summary.generated}`, 50, 148);
-    doc.fill(FG).text(`Total Findings: ${summary.total_findings} | Max CVSS: ${summary.max_cvss}`, 50, 162);
+    
+    // Stats Grid on Cover
+    doc.fill('#94a3b8').fontSize(11).text('Assessment Summary:', 50, 175);
+    doc.fill(FG).fontSize(10)
+      .text(`Total Discovered Findings: ${summary.total_findings}`, 70, 195)
+      .text(`Max CVSS Score: ${summary.max_cvss}`, 70, 210)
+      .text(`Total Crawler Requests: ${summary.endpoint_statistics.totalRequests}`, 70, 225)
+      .text(`Distinct Tested Targets: ${summary.endpoint_statistics.distinctUrls}`, 70, 240);
+
+    // Severity Breakdown list
+    doc.fill('#94a3b8').fontSize(11).text('Severity Distribution:', 50, 270);
+    let yPos = 290;
+    for (const [sev, count] of Object.entries(summary.severity_counts)) {
+      doc.fill(sevColors[sev] || FG).fontSize(10).text(`${sev}: ${count}`, 70, yPos);
+      yPos += 15;
+    }
 
     // Horizontal rule
-    doc.moveTo(50, 185).lineTo(doc.page.width - 50, 185).strokeColor('#1e2535').lineWidth(1).stroke();
-    doc.moveDown(4);
+    doc.moveTo(50, 420).lineTo(doc.page.width - 50, 420).strokeColor('#1e2535').lineWidth(1).stroke();
+
+    // Start findings page
+    doc.addPage();
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill(BG);
+    doc.y = 50;
 
     const all = getFindings();
     if (all.length === 0) {
-      doc.fill('#64748b').fontSize(14).text('No confirmed vulnerabilities in this session.', 50, 210);
+      doc.fill('#64748b').fontSize(14).text('No verified vulnerabilities found in this session.', 50, doc.y);
     } else {
       for (const f of all) {
-        const color = sevColors[f.cvss_severity] || '#64748b';
-        // Ensure we don't overflow page (simple check)
-        if (doc.y > doc.page.height - 200) doc.addPage().rect(0,0,doc.page.width,doc.page.height).fill(BG);
-
-
-        doc.fill(color).fontSize(14).text(`[${f.cvss_severity}] ${f.type}`, 50);
-        doc.fill(FG).fontSize(10).text(`${f.method} ${f.fullUrl || f.endpoint || f.host}`, 50);
-        doc.fill('#94a3b8').fontSize(9)
-          .text(`Parameter: ${f.parameter}   Payload: ${f.payload}`, 50);
-        doc.fill('#64748b')
-          .text(`CVSS: ${f.cvss_score} (${f.cvss_vector})`, 50);
-        doc.fill(FG).fontSize(9)
-          .text(`Evidence: ${typeof f.evidence === 'object' ? JSON.stringify(f.evidence) : (f.evidence||'').slice(0,200)}`, 50);
-        if (f.prevention) {
-          doc.fill(GRN).fontSize(8).text(`Fix: ${f.prevention.slice(0,180)}`, 50);
+        const color = sevColors[f.cvss_severity || f.severity] || '#64748b';
+        if (doc.y > doc.page.height - 180) {
+          doc.addPage();
+          doc.rect(0, 0, doc.page.width, doc.page.height).fill(BG);
+          doc.y = 50;
         }
-        doc.moveTo(50, doc.y+4).lineTo(doc.page.width-50, doc.y+4).strokeColor('#1e2535').stroke();
-        doc.moveDown(0.8);
+
+        doc.fill(color).fontSize(14).text(`[${f.cvss_severity || f.severity}] ${f.type || f.vulnerability_name}`, 50);
+        doc.fill(FG).fontSize(10).text(`${f.method} ${f.fullUrl || f.endpoint || f.host}`, 50);
+        doc.fill('#94a3b8').fontSize(9).text(`Parameter: ${f.parameter}   Payload: ${f.payload}`, 50);
+        doc.fill('#64748b').text(`CVSS: ${f.cvss_score || f.score} (${f.cvss_vector || 'N/A'})   Confidence: ${f.confidence || f.confidence_tier}`, 50);
+        
+        const evidenceSnippet = typeof f.evidence === 'object' ? JSON.stringify(f.evidence) : (f.evidence || '');
+        doc.fill('#cbd5e1').fontSize(9).text(`Reasoning: ${f.reasoning || f.explanation || 'N/A'}`, 50);
+        doc.fill('#64748b').fontSize(8).text(`Evidence Proof: ${evidenceSnippet.slice(0, 150)}...`, 50);
+        
+        if (f.prevention || f.remediation) {
+          doc.fill(GRN).fontSize(9).text(`Remediation: ${f.prevention || f.remediation}`, 50);
+        }
+        
+        doc.moveTo(50, doc.y + 6).lineTo(doc.page.width - 50, doc.y + 6).strokeColor('#1e2535').stroke();
+        doc.moveDown(1.5);
       }
     }
 
@@ -314,26 +379,95 @@ function generatePDF(outputStream) {
 function generateHTML() {
   const all = getFindings();
   const summary = buildSummary(all);
-  let html = `<!DOCTYPE html><html><head><title>MiniBurp Scan Report</title><style>
-    body { background: #0f172a; color: #e2e8f0; font-family: sans-serif; padding: 40px; }
-    .card { background: #1e293b; border: 1px solid #334155; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-    .Critical { color: #f43f5e; } .High { color: #ef4444; } .Medium { color: #f97316; } .Low { color: #eab308; }
-    pre { background: #000; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 11px; }
-    h1, h2 { color: #f97316; }
-  </style></head><body><h1>🔴 MiniBurp Security Assessment</h1>`;
-  
-  html += `<h2>Summary</h2><div class="card"><p><b>Total Findings:</b> ${summary.total_findings}</p><p><b>Risk Level:</b> ${summary.risk_rating}</p></div>`;
+  let html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>MiniBurp Scan Report</title>
+  <style>
+    body { background: #0b0b0f; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 40px; margin: 0; }
+    .container { max-width: 1000px; margin: 0 auto; }
+    h1 { color: #ef4444; border-bottom: 2px solid #1e2535; padding-bottom: 10px; font-weight: 800; letter-spacing: -0.5px; }
+    h2 { color: #f97316; margin-top: 30px; font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 30px; }
+    .stat-card { background: #12121a; border: 1px solid #1e2535; padding: 20px; border-radius: 8px; text-align: center; }
+    .stat-val { font-size: 28px; font-weight: 800; color: #f97316; margin-bottom: 5px; }
+    .stat-lbl { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
+    .card { background: #12121a; border: 1px solid #1e2535; padding: 24px; border-radius: 8px; margin-bottom: 25px; border-left: 4px solid #3b82f6; }
+    .card.Critical { border-left-color: #f43f5e; }
+    .card.High { border-left-color: #ef4444; }
+    .card.Medium { border-left-color: #f97316; }
+    .card.Low { border-left-color: #eab308; }
+    .badge { display: inline-block; padding: 2px 8px; font-size: 10px; font-weight: 700; border-radius: 4px; text-transform: uppercase; margin-right: 10px; }
+    .badge.Critical { background: rgba(244,63,94,0.15); color: #f43f5e; }
+    .badge.High { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .badge.Medium { background: rgba(249,115,22,0.15); color: #f97316; }
+    .badge.Low { background: rgba(234,179,8,0.15); color: #eab308; }
+    pre { background: #050508; border: 1px solid #1a1a24; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 12px; font-family: monospace; color: #a78bfa; }
+    .meta-line { font-size: 13px; margin: 6px 0; color: #94a3b8; }
+    .meta-line strong { color: #f8fafc; }
+    .remediation { background: rgba(34,197,94,0.05); border: 1px dashed rgba(34,197,94,0.3); padding: 15px; border-radius: 6px; color: #4ade80; margin-top: 15px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔴 MiniBurp Security Assessment Report</h1>
+    <div style="color: #64748b; font-size: 13px; margin-bottom: 30px;">
+      AI-Powered Behavioral Verification Platform &bull; Generated: ${summary.generated}
+    </div>
+
+    <h2>Executive Overview</h2>
+    <div class="grid">
+      <div class="stat-card">
+        <div class="stat-val" style="color: #ef4444;">${summary.risk_rating}</div>
+        <div class="stat-lbl">Risk Rating</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val">${summary.total_findings}</div>
+        <div class="stat-lbl">Total Findings</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" style="color: #3b82f6;">${summary.endpoint_statistics.discovered}</div>
+        <div class="stat-lbl">Discovered URLs</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" style="color: #10b981;">${summary.endpoint_statistics.tested}</div>
+        <div class="stat-lbl">Tested Endpoints</div>
+      </div>
+    </div>
+
+    <h2>Verified Findings</h2>`;
   
   all.forEach(f => {
-    html += `<div class="card"><h3 class="${f.cvss_severity}">${f.type} [${f.cvss_severity}]</h3>
-    <p><b>URL:</b> ${f.fullUrl || f.endpoint}</p>
-    <p><b>Parameter:</b> ${f.parameter} | <b>Payload:</b> <code>${f.payload}</code></p>
-    <p><b>Evidence:</b></p><pre>${typeof f.evidence === 'object' ? JSON.stringify(f.evidence, null, 2) : f.evidence}</pre>
-    <p><b>Remediation:</b> ${f.prevention}</p>
+    const sev = f.cvss_severity || f.severity || 'Medium';
+    const scoreVal = f.cvss_score || f.score || 0;
+    const evidenceStr = typeof f.evidence === 'object' ? JSON.stringify(f.evidence, null, 2) : f.evidence;
+    
+    html += `
+    <div class="card ${sev}">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">
+        <span style="font-size: 18px; font-weight: 700; color: #f8fafc;">
+          <span class="badge ${sev}">${sev}</span> ${f.type || f.vulnerability_name}
+        </span>
+        <span style="font-size: 12px; color: #64748b;">CVSS Score: <strong>${scoreVal}</strong> | Confidence: <strong>${f.confidence || f.confidence_tier}</strong></span>
+      </div>
+      <div class="meta-line"><strong>Target URL:</strong> <code>${f.method || 'GET'} ${f.fullUrl || f.endpoint}</code></div>
+      <div class="meta-line"><strong>Parameter:</strong> <code>${f.parameter}</code> &bull; <strong>Payload:</strong> <code>${f.payload}</code></div>
+      <div class="meta-line" style="margin-top: 15px;"><strong>Behavioral Verification Reasoning:</strong></div>
+      <p style="font-size: 14px; line-height: 1.6; color: #cbd5e1; margin-top: 5px;">${f.reasoning || f.explanation || 'N/A'}</p>
+      
+      <div class="meta-line" style="margin-top: 15px;"><strong>Evidence Proof:</strong></div>
+      <pre>${evidenceStr}</pre>
+
+      <div class="remediation">
+        <strong>Remediation:</strong> ${f.prevention || f.remediation || 'Enforce robust input validation and server-side parameterized sanitization.'}
+      </div>
     </div>`;
   });
   
-  html += `</body></html>`;
+  html += `
+  </div>
+</body>
+</html>`;
   return html;
 }
 

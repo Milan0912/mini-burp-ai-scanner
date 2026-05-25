@@ -86,7 +86,12 @@ export default function HistoryTab({ socket, apiBase }) {
       setDetail(d);
       
       const aiR = await fetch(`${apiBase}/api/ai/insights/${row.id}`);
-      if (aiR.ok) setAiData(await aiR.json());
+      if (aiR.ok) {
+        const data = await aiR.json();
+        if (!data) return;
+        if (!data.findings) data.findings = [];
+        setAiData(data);
+      }
     } catch (e) { console.error('[History] detail error:', e); }
   };
 

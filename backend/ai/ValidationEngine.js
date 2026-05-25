@@ -62,7 +62,7 @@ function validate(baseline, attack, context) {
             signals.push('XSS Reflection Confirmed');
         } else if (payload.length > 5 && body.includes(payload.slice(0, 5).toLowerCase())) {
             score += 40;
-            signals.push('Partial XSS Reflection (Suspicious)');
+            signals.push('Partial XSS Reflection (Informational)');
         }
     }
 
